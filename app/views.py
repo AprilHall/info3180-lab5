@@ -1,128 +1,101 @@
-"""
-Flask Documentation:     http://flask.pocoo.org/docs/
-Jinja2 Documentation:    http://jinja.pocoo.org/2/documentation/
-Werkzeug Documentation:  http://werkzeug.pocoo.org/documentation/
-This file creates your application.
-"""
-import os, datetime, random, re
-from app import app, db
-from flask import render_template, request, redirect, url_for, flash,jsonify, make_response,session,abort
-from forms import ProfileForm
-from models import UserProfile
+from app import app, db, allowed_exts
+from flask import render_template, request, url_for, redirect, flash
+from forms import NewProfileForm
 from werkzeug.utils import secure_filename
+from models import User
+from sqlalchemy import exc
 
+import datetime
+import os
 
-###
-# Routing for your application.
-###
-
-@app.route('/')
+@app.route("/")
 def home():
-    """Render website's home page."""
     return render_template('home.html')
-
-
-@app.route('/about/')
-def about():
-    """Render the website's about page."""
-    return render_template('about.html')
-
-
-@app.route("/profile", methods=["GET", "POST"])
+    
+    
+@app.route("/newProfile", methods=["GET", "POST"])
 def newProfile():
+    newProfileForm = NewProfileForm()
     
-    form = ProfileForm()
-    
-    if request.method == 'GET':
-        return render_template('newProfile.html', form=form)
-    elif request.method == 'POST':
-        if form.validate_on_submit():
-            firstname = form.firstname.data
-            lastname = form.lastname.data
-            gender = form.gender.data
-            email = form.email.data
-            location = form.location.data
-            bio = form.bio.data
-            dateCreated = datetime.date.today()
-            
-            photo = form.photo.data
-            filename = secure_filename(photo.filename)
-            photo.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
-            
-            userid = generateUserId(firstname, lastname)
-            
-            newUser = UserProfile(userid=userid, first_name=firstname, last_name=lastname, 
-            gender=gender, email= email,location= location, biography=bio, pic=filename, created_on=dateCreated)
+    if request.method == "POST":
+        if newProfileForm.validate_on_submit():
+            try:
+                firstname = newProfileForm.firstname.data
+                lastname = newProfileForm.lastname.data
+                gender = newProfileForm.gender.data
+                email = newProfileForm.email.data
+                location = newProfileForm.location.data
+                bio = newProfileForm.bio.data
+                created = str(datetime.datetime.now()).split()[0]
                 
-            db.session.add(newUser)
-            db.session.commit()
+                photo = newProfileForm.photo.data
+                photo_name = secure_filename(photo.filename)
+                
+                user = User(firstname, lastname, gender, email, location, bio, created, photo_name)
+                
+                db.session.add(user)
+                db.session.commit()
+                
+                photo.save(os.path.join(app.config['UPLOAD_FOLDER'],photo_name))
+                
+                flash("Profile Added", "success")
+                return redirect(url_for("profiles"))
             
-            flash("Profile Successfully Created", "success")
-            return redirect(url_for("profiles"))
+            except Exception as e:
+                db.session.rollback()
+                flash("Internal Error", "danger")
+                return render_template("newProfile.html", newProfileForm = newProfileForm)
+        
+        errors = form_errors(newProfileForm)
+        flash(''.join(error+" " for error in errors), "danger")
+    return render_template("newProfile.html", newProfileForm = newProfileForm)
 
-"""@app.route('/profile/<userid>', methods=['GET', 'POST'])
-def viewProfile(userid):
-    user = UserProfile.query.filter_by(userid=userid).first()
+
+@app.route("/profiles")
+def profiles():
+    users = User.query.all()
+    profiles = []
     
-    if request.method == 'GET':
-        if user is not None:
-            return render_template("profile.html", user=user)
-        else:
-            flash('User Not Found', 'danger')
-            return redirect(url_for("home"))
-            
-    elif request.method == 'POST':
-        if user is not None:
-            response = make_response(jsonify(userid=user.userid, username=user.username, image=user.pic, gender=user.gender, age=user.age,
-                    profile_created_on=user.created_on))
-            response.headers['Content-Type'] = 'application/json'            
-            return response
-        else:
-            flash('User Not Found', 'danger')
-            return redirect(url_for("home"))"""
+    for user in users:
+        profiles.append({"pro_pic": user.photo, "f_name":user.firstname, "l_name": user.lastname, "gender": user.gender, "location":user.location, "id":user.id})
+    
+    return render_template("profiles.html", profiles = profiles)
 
 @app.route('/profile/<userid>')
-def profile(userid):
-    user = UserProfile.query.filter_by(userid=userid).first()
-    return render_template('profile.html',userid=userid)
-            
-            
-@app.route('/profiles', methods=['GET', 'POST'])
-def profiles():
-    user_list = UserProfile.query.all()
-    users = [{"First Name": user.first_name, "Last Name": user.last_name, "userid": user.userid} for user in user_list]
+def inidi_profile(userid):
+    user = User.query.filter_by(id=userid).first()
     
-    if request.method == 'GET':
-        if user_list is not None:
-            return render_template("profiles.html", users=user_list)
-        else:
-            flash('No Users Found', 'danger')
-            return redirect(url_for("home"))
+    if user is None:
+        return redirect(url_for('home'))
+        
+    c_y = int(user.created_on.split("-")[0])
+    c_m = int(user.created_on.split("-")[1])
+    c_d = int(user.created_on.split("-")[2])
+    
+    user.created_on = format_date_joined(c_y, c_m, c_d)
+    
+    return render_template("profile.html", user=user)
+
+def format_date_joined(yy,mm,dd):
+    return datetime.date(yy,mm,dd).strftime("%B, %d,%Y")
+
+
+def read_file(filename):
+    data = ""
+    
+    with open(filename, "r") as stream:
+        data = stream.read()
+        
+    return data
+
+def form_errors(form):
+    error_list =[]
+    for field, errors in form.errors.items():
+        for error in errors:
+            error_list.append(field+": "+error)
             
-    elif request.method == 'POST':
-        if user_list is not None:
-            response = make_response(jsonify({"users": users}))                                           
-            response.headers['Content-Type'] = 'application/json'            
-            return response
-        else:
-            flash('No Users Found', 'danger')
-            return redirect(url_for("home"))  
-  
-def generateUserId(firstname, lastname):
-    temp = re.sub('[.: -]', '', str(datetime.datetime.now()))
-    temp = list(temp)
-    temp.extend(list(map(ord,firstname)))
-    temp.extend(list(map(ord,lastname)))
-    random.shuffle(temp)
-    temp = list(map(str,temp))
-    return int("".join(temp[:7]))%10000000 
-
-@app.route('/<file_name>.txt')
-def send_text_file(file_name):
-    """Send your static text file."""
-    file_dot_text = file_name + '.txt'
-    return app.send_static_file(file_dot_text)
-
+    return error_list
+    
 @app.after_request
 def add_header(response):
     """
@@ -138,7 +111,3 @@ def add_header(response):
 def page_not_found(error):
     """Custom 404 page."""
     return render_template('404.html'), 404
-
-
-if __name__ == '__main__':
-    app.run(debug=True, host="0.0.0.0", port="8080")
